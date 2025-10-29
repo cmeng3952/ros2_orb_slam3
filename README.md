@@ -160,7 +160,75 @@ https://github.com/Mechazo11/ros2_orb_slam3/assets/44814419/af9eaa79-da4b-4405-a
 
 Thank you for taking the time in checking this project out. I hope it helps you out. If you find this package useful in your project consider citing the papers mentioned above
 
-## TODO next version:
+## 4. RealSense D435i Live Camera (Monocular)
+
+This package now supports streaming live images from a camera (e.g., Intel RealSense D435i) directly into the ORB‑SLAM3 C++ node using the Python driver.
+
+### 4.1 Start the camera driver
+
+Terminal 1:
+
+```bash
+source ~/ros2_test/install/setup.bash
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -p enable_color:=true -p color_width:=640 -p color_height:=480 -p color_fps:=30
+```
+
+By default, the Python driver expects the color topic: `/camera/camera/color/image_raw`.
+
+### 4.2 Start the ORB‑SLAM3 C++ node
+
+Terminal 2:
+
+```bash
+source ~/ros2_test/install/setup.bash
+ros2 run ros2_orb_slam3 mono_node_cpp
+```
+
+### 4.3 Start the Python driver in live mode
+
+Terminal 3:
+
+```bash
+source ~/ros2_test/install/setup.bash
+ros2 run ros2_orb_slam3 mono_driver_node.py --ros-args \
+  -p settings_name:=RealSense_D435i \
+  -p use_live_camera:=true \
+  -p camera_topic:=/camera/camera/color/image_raw
+```
+
+If your RealSense publishes a different color topic, override `camera_topic` accordingly.
+
+### 4.4 Calibration and resolution notes
+
+- Ensure the YAML at `ros2_orb_slam3/orb_slam3/config/Monocular/RealSense_D435i.yaml` matches the actual camera resolution and intrinsics.
+- If you run the color stream at 640×480@30, the included `RealSense_D435i.yaml` already uses 640×480.
+- If you choose 1280×720 (or any other resolution), update:
+  - `Camera.width`, `Camera.height`, and `Camera.fps` in the YAML
+  - `Camera1.fx`, `Camera1.fy`, `Camera1.cx`, `Camera1.cy` with values from the live camera.
+- To read intrinsics from the camera:
+
+```bash
+ros2 topic echo /camera/camera/color/camera_info -n 1
+```
+
+Map fields as: `K[0] → fx`, `K[4] → fy`, `K[2] → cx`, `K[5] → cy`. If distortion is non‑zero, set `Camera1.k1/k2/p1/p2` accordingly (or keep zeros if your stream is rectified).
+
+### 4.5 Troubleshooting
+
+- Handshake: The Python node prints “Handshake complete” after receiving `ACK` from the C++ node.
+- Topic name: Verify the color topic exists: `ros2 topic list | grep image_raw`.
+- FPS: If tracking is unstable, align `Camera.fps` in YAML with the camera stream frame rate.
+- Windows: The C++ node enables Pangolin and OpenCV windows by default in this example.
+
+## 5. Python driver parameters
+
+- `settings_name` (string): Name of the YAML (without extension) under `orb_slam3/config/Monocular/`. Example: `EuRoC`, `RealSense_D435i`.
+- `image_seq` (string): Dataset sequence name (used only in dataset mode). Ignored when `use_live_camera=true`.
+- `use_live_camera` (bool): Enable live camera forwarding. Default: `false`.
+- `camera_topic` (string): ROS2 image topic to subscribe to. Default: `/camera/camera/color/image_raw`.
+
+## 6. TODO next version:
 
 - [ ] Stereo mode example
 - [ ] RGBD mode example
