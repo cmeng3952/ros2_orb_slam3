@@ -59,10 +59,14 @@ class MonoDriver(Node):
         # Initialize parameters to be passed from the command line (or launch file)
         self.declare_parameter("settings_name","EuRoC")
         self.declare_parameter("image_seq","NULL")
+        self.declare_parameter("use_live_camera", False)
+        self.declare_parameter("camera_topic", "/camera/camera/color/image_raw")
 
         #* Parse values sent by command line
         self.settings_name = str(self.get_parameter('settings_name').value) 
         self.image_seq = str(self.get_parameter('image_seq').value)
+        self.use_live_camera = bool(self.get_parameter('use_live_camera').value)
+        self.camera_topic = str(self.get_parameter('camera_topic').value)
 
         # DEBUG
         print(f"-------------- Received parameters --------------------------\n")
@@ -86,11 +90,11 @@ class MonoDriver(Node):
         # Define a CvBridge object
         self.br = CvBridge()
 
-        # Read images from the chosen dataset, order them in ascending order and prepare timestep data as well
-        self.imgz_seqz_dir, self.imgz_seqz, self.time_seqz = self.get_image_dataset_asl(self.image_sequence_dir, "mav0") 
-
-        print(self.image_seq_dir)
-        print(len(self.imgz_seqz))
+        # Read images from dataset only if not using live camera
+        if not self.use_live_camera:
+            self.imgz_seqz_dir, self.imgz_seqz, self.time_seqz = self.get_image_dataset_asl(self.image_sequence_dir, "mav0") 
+            print(self.image_seq_dir)
+            print(len(self.imgz_seqz))
 
         #* ROS2 publisher/subscriber variables [HARDCODED]
         self.pub_exp_config_name = "/mono_py_driver/experiment_settings" 
@@ -118,6 +122,11 @@ class MonoDriver(Node):
         self.publish_img_msg_ = self.create_publisher(Image, self.pub_img_to_agent_name, 1)
         
         self.publish_timestep_msg_ = self.create_publisher(Float64, self.pub_timestep_to_agent_name, 1)
+
+        # In live mode, subscribe to incoming camera images and forward them
+        if self.use_live_camera:
+            self.get_logger().info(f"Live mode enabled. Subscribing to: {self.camera_topic}")
+            self.live_image_sub_ = self.create_subscription(Image, self.camera_topic, self.live_image_callback, 10)
 
 
         # Initialize work variables for main logic
@@ -211,6 +220,33 @@ class MonoDriver(Node):
         except CvBridgeError as e:
             print(e)
     # ****************************************************************************************
+    
+    # ****************************************************************************************
+    def live_image_callback(self, msg: Image):
+        """
+            Receive live images, forward them to the CPP node with a timestamp.
+        """
+        # Wait until handshake finishes
+        if self.send_config:
+            return
+
+        # Use source timestamp if available; otherwise, use node clock
+        try:
+            # Convert builtin_interfaces/Time to float seconds
+            stamp = msg.header.stamp
+            timestep = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        except Exception:
+            timestep = float(self.get_clock().now().nanoseconds) * 1e-9
+
+        timestep_msg = Float64()
+        timestep_msg.data = timestep
+
+        try:
+            self.publish_timestep_msg_.publish(timestep_msg)
+            self.publish_img_msg_.publish(msg)
+        except CvBridgeError as e:
+            print(e)
+    # ****************************************************************************************
         
 
 # main function
@@ -230,20 +266,27 @@ def main(args = None):
         
     print(f"Handshake complete")
 
-    #* Blocking loop to send RGB image and timestep message
-    for idx, imgz_name in enumerate(n.imgz_seqz[n.start_frame:n.end_frame]):
+    if n.use_live_camera:
+        # In live mode, just spin and forward incoming frames
         try:
-            rclpy.spin_once(n) # Blocking we need a non blocking take care of callbacks
-            n.run_py_node(idx, imgz_name)
-            rate.sleep()
-
-            # DEBUG, if you want to halt sending images after a certain Frame is reached
-            if (n.frame_id>n.frame_stop and n.frame_stop != -1):
-                print(f"BREAK!")
-                break
-        
+            rclpy.spin(n)
         except KeyboardInterrupt:
-            break
+            pass
+    else:
+        #* Blocking loop to send RGB image and timestep message from dataset
+        for idx, imgz_name in enumerate(n.imgz_seqz[n.start_frame:n.end_frame]):
+            try:
+                rclpy.spin_once(n) # Blocking we need a non blocking take care of callbacks
+                n.run_py_node(idx, imgz_name)
+                rate.sleep()
+
+                # DEBUG, if you want to halt sending images after a certain Frame is reached
+                if (n.frame_id>n.frame_stop and n.frame_stop != -1):
+                    print(f"BREAK!")
+                    break
+            
+            except KeyboardInterrupt:
+                break
 
     # Cleanup
     cv2.destroyAllWindows() # Close all image windows
